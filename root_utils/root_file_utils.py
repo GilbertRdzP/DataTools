@@ -139,11 +139,17 @@ class WCSim:
         trigger = []
         for t in range(self.ntrigger):
             self.get_trigger(t)
+            trig_type = self.trigger.GetTriggerType()
+            triggerInfo = self.trigger.GetTriggerInfo() 
+            if (trig_type != 3) and (len(triggerInfo) >= 3):
+                triggerShift = triggerInfo[1]
+                triggerTime = triggerInfo[2]
+
             for hit in self.trigger.GetCherenkovDigiHits():
                 pmt_id = hit.GetTubeId() - 1
                 position.append([self.geo.GetPMT(pmt_id).GetPosition(j) for j in range(3)])
                 charge.append(hit.GetQ())
-                time.append(hit.GetT())
+                time.append(hit.GetT() + triggerTime - triggerShift) ## Correct the hit time adding the trigger time and resting the trigger shift.
                 pmt.append(pmt_id)
                 trigger.append(t)
         hits = {
