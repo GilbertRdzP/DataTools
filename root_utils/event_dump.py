@@ -80,6 +80,11 @@ def dump_file(infile, outfile):
 
     has_roostracker_info = False
 
+    # Optional outer detector information.
+    # A real event with no OD hits is stored as 0; -1 means unavailable.
+    od_nhits = np.full(nevents, -1, dtype=np.int32)
+    has_od_info = False
+
     for ev in range(wcsim.nevent - 1): #Remove the last event which is corrupt (Use only for beam)
         wcsim.get_event(ev)
 
@@ -96,6 +101,11 @@ def dump_file(infile, outfile):
             evt_code[ev] = roostracker_info["evt_code"]
             neutrino_id[ev] = roostracker_info["neutrino_id"]
             npions[ev] = roostracker_info["npions"]
+
+        event_od_nhits = wcsim.get_od_nhits()
+        if event_od_nhits is not None:
+            has_od_info = True
+            od_nhits[ev] = event_od_nhits
 
         true_hits = wcsim.get_hit_photons()
         true_hit_pmt[ev] = true_hits["pmt"]
@@ -180,6 +190,9 @@ def dump_file(infile, outfile):
         output_dict["evt_code"] = evt_code
         output_dict["neutrino_id"] = neutrino_id
         output_dict["npions"] = npions
+
+    if has_od_info:
+        output_dict["od_nhits"] = od_nhits
 
     np.savez_compressed(outfile, **output_dict)
     

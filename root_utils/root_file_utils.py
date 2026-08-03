@@ -19,6 +19,12 @@ class WCSim:
         self.tree.GetEvent(0)
         self.current_event = 0
         self.event = self.tree.wcsimrootevent
+        self.has_od = bool(self.tree.GetBranch("wcsimrootevent_OD"))
+        self.od_event = (
+            getattr(self.tree, "wcsimrootevent_OD", None)
+            if self.has_od
+            else None
+        )
         self.ntrigger = self.event.GetNumberOfEvents()
         self.trigger = self.event.GetTrigger(0)
         self.current_trigger = 0
@@ -28,12 +34,32 @@ class WCSim:
         # triggers = [self.event.GetTrigger(i) for i in range(self.ntrigger)]
         # oldfile = self.tree.GetCurrentFile()
         self.event.ReInitialize() # since v1.12.20
+        if self.has_od and self.od_event is not None:
+            self.od_event.ReInitialize()
         self.tree.GetEvent(ev)
         # if self.tree.GetCurrentFile() == oldfile:
         #     [t.Delete() for t in triggers]
         self.current_event = ev
         self.event = self.tree.wcsimrootevent
+        if self.has_od:
+            self.od_event = getattr(self.tree, "wcsimrootevent_OD", None)
         self.ntrigger = self.event.GetNumberOfEvents()
+
+    def get_od_nhits(self):
+        """
+        Return the total number of digitized OD hits across all OD triggers.
+
+        Returns None when the ROOT file has no wcsimrootevent_OD branch.
+        """
+        if not self.has_od or self.od_event is None:
+            return None
+
+        total_nhits = 0
+        for i in range(int(self.od_event.GetNumberOfEvents())):
+            trigger = self.od_event.GetTrigger(i)
+            total_nhits += int(trigger.GetNcherenkovdigihits())
+
+        return total_nhits
 
     def get_trigger(self, trig):
         self.trigger = self.event.GetTrigger(trig)

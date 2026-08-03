@@ -45,6 +45,8 @@ if __name__ == '__main__':
     # The final HDF5 will only contain these datasets if at least one
     # input .npz file contains them.
     has_roostracker_info = False
+    # Optional outer detector hit counts.
+    has_od_info = False
     for input_file in config.input_files:
         print(input_file, flush=True)
         if not os.path.isfile(input_file):
@@ -56,6 +58,8 @@ if __name__ == '__main__':
             and 'npions' in npz_file.files
         ):
             has_roostracker_info = True
+        if 'od_nhits' in npz_file.files:
+            has_od_info = True
         trigger_times = npz_file['trigger_time']
         trigger_types = npz_file['trigger_type']
         hit_triggers = npz_file['digi_hit_trigger']
@@ -141,6 +145,15 @@ if __name__ == '__main__':
         dset_neutrino_id[:] = 0
         dset_npions[:] = -1
 
+    if has_od_info:
+        dset_od_nhits = f.create_dataset(
+            "od_nhits",
+            shape=(total_rows,),
+            dtype=np.int32
+        )
+        # -1 distinguishes missing OD data from a real event with zero hits.
+        dset_od_nhits[:] = -1
+
     offset = 0
     offset_next = 0
     hit_offset = 0
@@ -167,11 +180,14 @@ if __name__ == '__main__':
         track_start_position = npz_file['track_start_position']
         boundary_kes= npz_file['track_boundary_kes']
         boundary_types= npz_file['track_boundary_types']
+        od_hit_counts = (
+            npz_file['od_nhits']
+            if has_od_info and 'od_nhits' in npz_file.files
+            else None
+        )
         if has_roostracker_info:
             if 'evt_code' in npz_file.files:
                 neut_codes = npz_file['evt_code']
-            elif 'neut_code' in npz_file.files:
-                neut_codes = npz_file['neut_code']
             else:
                 neut_codes = None
 
@@ -201,6 +217,9 @@ if __name__ == '__main__':
 
             if n_pions is not None:
                 dset_npions[offset:offset_next] = n_pions
+
+        if has_od_info and od_hit_counts is not None:
+            dset_od_nhits[offset:offset_next] = od_hit_counts
 
         labels = np.full(pids.shape[0], -1)
         for k, v in label_map.items():
