@@ -4,6 +4,7 @@ import numpy as np
 
 #Uncomment the following line if using old WCSim versions
 #ROOT.gSystem.Load(os.environ['WCSIMDIR'] + "/libWCSimRoot.so")
+ROOT.gSystem.Load("/project/6002456/gilrdzp/Analysis/RecoAnalysis/libReadNuPRISM/libReadNuPRISM.so")
 
 class WCSim:
     def __init__(self, tree):
@@ -66,9 +67,415 @@ class WCSim:
                 energy.append(tracks[i].GetE())
         return direction, energy, pid, position
 
+    def _truth_from_roostracker(self):
+        """
+        Build truth information from fRooTrackerOutputTree.
+    
+        Truth definitions:
+          energy    = selected particle energy in MeV
+          position  = EvtVtx[0:3] in cm
+          direction = selected particle momentum direction
+    
+        Event PID rules:
+          IsTrueNCGamma                   -> 22
+          IsTrueNuECC0PiEvent             -> 11
+          IsUncontainedTrueNuMuCC0PiEvent -> 13
+          IsTrueNCPi0                     -> 111
+          else                            -> 0
+        """
+        if not hasattr(self, "file") or not self.file:
+            return None
+    
+        rt = self.file.Get("fRooTrackerOutputTree")
+        if not rt:
+            return None
+    
+        if self.current_event >= rt.GetEntries():
+            return None
+    
+        rt.GetEntry(self.current_event)
+    
+        try:
+            vtx = rt.NRooTrackerVtx
+        except AttributeError:
+            return None
+    
+        if not vtx:
+            return None
+    
+        # ------------------------------------------------------------
+        # Basic helpers
+        # ------------------------------------------------------------
+    
+        def get_neut_code(vtx):
+            """
+            Extract NEUT interaction code from RooTracker EvtCode.
+            """
+            try:
+                evt_code = int(vtx.EvtCode.GetString().Atoi())
+            except Exception:
+                try:
+                    evt_code = int(vtx.EvtCode.GetString().Data())
+                except Exception:
+                    evt_code = None
+            return evt_code
+    
+        def p4_gev(i):
+            """
+            Access StdHepP4 as a flat array:
+              StdHepP4[4*i + 0] = px
+              StdHepP4[4*i + 1] = py
+              StdHepP4[4*i + 2] = pz
+              StdHepP4[4*i + 3] = E
+            Units are assumed to be GeV.
+            """
+            px = float(vtx.StdHepP4[4*i + 0])
+            py = float(vtx.StdHepP4[4*i + 1])
+            pz = float(vtx.StdHepP4[4*i + 2])
+            E  = float(vtx.StdHepP4[4*i + 3])
+            return px, py, pz, E
+    
+        def momentum_mag_gev(i):
+            px, py, pz, _ = p4_gev(i)
+            return np.sqrt(px*px + py*py + pz*pz)
+    
+        def ring_evis_gev(mom, mass):
+            """
+            Same visible-energy estimate as the C++ code.
+            """
+            n_water = 1.334
+            threshold = mass / np.sqrt(n_water*n_water - 1.0)
+    
+            e = np.sqrt(mom*mom + mass*mass)
+            e_thr = np.sqrt(threshold*threshold + mass*mass)
+    
+            return max(0.0, e - e_thr)
+    
+        def mass_for_one_ring_candidate(iPDG, mom):
+            """
+            Python equivalent of the mass assignment inside IsOneRingCandidate.
+            Returns None if the particle should be skipped.
+            """
+            if iPDG == 22 and mom > 0.01: #gamma excl. low mom
+                return 0.0
+            elif iPDG == 11:              #electron
+                return 0.0005110
+            elif iPDG == 13:              #muon
+                return 0.1056584
+            elif iPDG == 211:             #pi+-
+                return 0.1395702
+            elif iPDG == 111:             #pi0
+                return 0.0
+            elif iPDG == 2212:            #proton
+                return 0.9382720
+            elif iPDG == 221:             #eta, decays to pi0             
+                return 0.0
+            elif iPDG in (321, 310, 130): #Kaons - decay to muons/pions with short lifetime, set to 0 threshold for now...
+                return 0.0
+            else:
+                return None
+    
+        def is_one_ring_candidate(thresh):
+            """
+            Python equivalent of:
+    
+              bool IsOneRingCandidate(int &pid, double thresh)
+    
+            Returns:
+              (is_one_ring, pid, index)
+    
+            where pid is the absolute PDG of the one visible particle,
+            and index is its StdHep index.
+            """
+            n_visible = 0
+            candidate_pid = 0
+            candidate_index = None
+    
+            for i in range(3, int(vtx.StdHepN)):
+                iPDG = abs(int(vtx.StdHepPdg[i]))
+    
+                mom = momentum_mag_gev(i)
+                mass = mass_for_one_ring_candidate(iPDG, mom)
+    
+                if mass is None:
+                    continue
+    
+                ring_evis = ring_evis_gev(mom, mass)
+    
+                if ring_evis > thresh:
+                    n_visible += 1
+                    candidate_pid = iPDG
+                    candidate_index = i
+    
+            return (n_visible == 1), candidate_pid, candidate_index
+    
+        def is_true_numu_cc0pi_event(thresh):
+            """
+            Python equivalent of IsTrueNuMuCC0PiEvent.
+            """
+            neut_code = get_neut_code(vtx)
+            if neut_code is None:
+                return False
+    
+            if abs(neut_code) >= 30 or int(vtx.StdHepPdg[0]) != 14:
+                return False
+            one_ring, _, _ = is_one_ring_candidate(thresh)
+            if not one_ring:
+                return False
+    
+            return True
+    
+        def is_true_nue_cc0pi_event(thresh):
+            """
+            Python equivalent of IsTrueNuECC0PiEvent.
+            """
+            neut_code = get_neut_code(vtx)
+            if neut_code is None:
+                return False
+            if abs(neut_code) >= 30 or int(vtx.StdHepPdg[0]) != 12:
+                return False
+            one_ring, _, _ = is_one_ring_candidate(thresh)
+            if one_ring:
+                return True
+    
+            return False
+    
+        def is_true_ncpi0():
+            """
+            Python equivalent of IsTrueNCPi0.
+            Uses the same fixed 30 MeV visible-energy threshold.
+            """
+            neut_code = get_neut_code(vtx)
+            if neut_code is None:
+                return False
+    
+            if abs(neut_code) < 30:
+                return False
+    
+            n_pi0 = 0
+            for i in range(0, int(vtx.StdHepN)):
+                if int(vtx.StdHepPdg[i]) == 111:
+                    n_pi0 += 1
+    
+            n_charge = 0
+            n_photon = 0
+    
+            if n_pi0:
+                for i in range(0, int(vtx.StdHepN)):
+                    iPDG = abs(int(vtx.StdHepPdg[i]))
+                    mom = momentum_mag_gev(i)
+    
+                    if iPDG == 22:
+                        mass = 0.0
+                    elif iPDG == 11:
+                        mass = 0.0005110
+                    elif iPDG == 13:
+                        mass = 0.1056584
+                    elif iPDG == 111:
+                        mass = 0.0
+                    elif iPDG == 211:
+                        mass = 0.1395702
+                    elif iPDG == 2212:
+                        mass = 0.9382720
+                    else:
+                        mass = 0.9382720
+    
+                    ring_evis = ring_evis_gev(mom, mass)
+    
+                    if ring_evis > 0.03:
+                        if iPDG == 22 or iPDG == 111:
+                            n_photon += 1
+                        else:
+                            n_charge += 1
+    
+            return (n_pi0 >= 1) and (n_charge == 0)
+    
+        def is_true_ncgamma(thresh):
+            """
+            Python implementation of a IsTrueNCGamma method.
+            """
+            neut_code = get_neut_code(vtx)
+            if neut_code is None:
+                return False
+    
+            if abs(neut_code) < 30:
+                return False
+    
+            # Explicit pion veto
+            for i in range(3, int(vtx.StdHepN)):
+                iPDG = abs(int(vtx.StdHepPdg[i]))
+                if iPDG == 111 or iPDG == 211:
+                    return False
+    
+            one_ring, ring_pid, _ = is_one_ring_candidate(thresh)
+            if not one_ring:
+                return False
+    
+            if ring_pid != 22:
+                return False
+    
+            return True
+    
+        # ------------------------------------------------------------
+        # Event PID classification
+        # ------------------------------------------------------------
+        thresh = 0.03  # GeV = 30 MeV
+    
+        if is_true_ncgamma(thresh):
+            event_pid = 22
+        elif is_true_nue_cc0pi_event(thresh):
+            event_pid = 11
+        elif is_true_numu_cc0pi_event(thresh):
+            event_pid = 13
+        elif is_true_ncpi0():
+            event_pid = 111
+        else:
+            event_pid = 0
+    
+        # ------------------------------------------------------------
+        # Position
+        # ------------------------------------------------------------
+        true_position = [
+            float(vtx.EvtVtx[0]) * 100.0,
+            float(vtx.EvtVtx[1]) * 100.0,
+            float(vtx.EvtVtx[2]) * 100.0,
+        ]
+    
+        # ------------------------------------------------------------
+        # Direction and energy selection
+        #
+        # Keep your current logic:
+        #   1. Prefer charged lepton if present
+        #   2. Otherwise use highest-energy pion/gamma candidate
+        # ------------------------------------------------------------
+    
+        particle_p3 = None
+        true_energy = None
+        pion_gamma_candidates = []
+    
+        for i in range(1, int(vtx.StdHepN)):
+            pdg = int(vtx.StdHepPdg[i])
+    
+            px = float(vtx.StdHepP4[4*i + 0]) * 1000.0
+            py = float(vtx.StdHepP4[4*i + 1]) * 1000.0
+            pz = float(vtx.StdHepP4[4*i + 2]) * 1000.0
+            E  = float(vtx.StdHepP4[4*i + 3]) * 1000.0
+    
+            if abs(pdg) in (11, 13, 15):
+                true_energy = E
+                particle_p3 = [px, py, pz]
+                break
+    
+            elif abs(pdg) in (211, 111, 213, 113, 22):
+                pion_gamma_candidates.append({
+                    "index": i,
+                    "pdg": pdg,
+                    "p4": [px, py, pz, E],
+                    "energy": E,
+                })
+    
+        # If no charged lepton was found, use the highest energy pion/gamma
+        if particle_p3 is None:
+            if len(pion_gamma_candidates) == 0:
+                return None
+    
+            best_particle = max(
+                pion_gamma_candidates,
+                key=lambda x: x["energy"]
+            )
+    
+            px, py, pz, E = best_particle["p4"]
+            true_energy = E
+            particle_p3 = [px, py, pz]
+    
+        if particle_p3 is None:
+            return None
+    
+        norm = np.sqrt(sum(p ** 2 for p in particle_p3))
+    
+        if norm == 0 or not np.isfinite(norm):
+            return None
+    
+        true_direction = [p / norm for p in particle_p3]
+    
+        return {
+            "pid": event_pid,
+            "position": true_position,
+            "direction": true_direction,
+            "energy": true_energy,
+        }
+
+    def get_roostracker_event_info(self):
+        """
+        Return extra RooTracker truth information if fRooTrackerOutputTree exists.
+
+        Returns
+        -------
+        dict or None
+        Dictionary contains:
+          - evt_code
+          - neutrino_id
+          - npions
+        Returns None if the file has no RooTracker tree or the vertex cannot be read.
+        """
+        if not hasattr(self, "file") or not self.file:
+            return None
+        rt = self.file.Get("fRooTrackerOutputTree")
+        if not rt:
+            return None
+        if self.current_event >= rt.GetEntries():
+            return None
+        rt.GetEntry(self.current_event)
+        try:
+            vtx = rt.NRooTrackerVtx
+        except AttributeError:
+            return None
+        if not vtx:
+            return None
+            
+        # NEUT event code:
+        try:
+            evt_code = int(vtx.EvtCode.GetString().Atoi())
+        except Exception:
+            try:
+                evt_code = int(vtx.EvtCode.GetString().Data())
+            except Exception:
+                evt_code = None
+        # Neutrino type ID:
+        try:
+            neutrino_id = int(vtx.StdHepPdg[0])
+        except Exception:
+            neutrino_id = None
+        # Number of pions:
+        npions = 0
+        try:
+            for i in range(1, int(vtx.StdHepN)):
+                pdg_mod = abs(int(vtx.StdHepPdg[i])) % 1000
+
+                if pdg_mod in (211, 111, 213, 113):
+                    npions += 1
+        except Exception:
+            npions = None
+        if evt_code is None:
+            evt_code = -9999
+        if neutrino_id is None:
+            neutrino_id = 0
+        if npions is None:
+            npions = -1
+        return {
+            "evt_code": evt_code,
+            "neutrino_id": neutrino_id,
+            "npions": npions,
+        }
+    
     def get_event_info(self):
         self.get_trigger(0)
         tracks = self.trigger.GetTracks()
+
+        roostracker_truth = self._truth_from_roostracker() ## If it contains a RooTracker class then do this 
+        if roostracker_truth is not None:
+            return roostracker_truth
+        
         # Primary particles with no parent are the initial simulation
         particles = [t for t in tracks if t.GetFlag() == 0 and t.GetParenttype() == 0]
         # Check there is exactly one particle with no parent:

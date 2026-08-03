@@ -41,11 +41,21 @@ if __name__ == '__main__':
     good_hits = 0
     print("counting events and hits, in files")
     file_event_triggers = {}
+    # Optional RooTracker information
+    # The final HDF5 will only contain these datasets if at least one
+    # input .npz file contains them.
+    has_roostracker_info = False
     for input_file in config.input_files:
         print(input_file, flush=True)
         if not os.path.isfile(input_file):
             raise ValueError(input_file+" does not exist")
         npz_file = np.load(input_file, allow_pickle=True)
+        if (
+            'evt_code' in npz_file.files
+            and 'neutrino_id' in npz_file.files
+            and 'npions' in npz_file.files
+        ):
+            has_roostracker_info = True
         trigger_times = npz_file['trigger_time']
         trigger_types = npz_file['trigger_type']
         hit_triggers = npz_file['digi_hit_trigger']
@@ -107,12 +117,35 @@ if __name__ == '__main__':
     dset_veto2 = f.create_dataset("veto2",
                                   shape=(total_rows,),
                                   dtype=np.bool_)
+    if has_roostracker_info:
+        dset_neut_code = f.create_dataset(
+            "neut_code",
+            shape=(total_rows,),
+            dtype=np.int32
+        )
+
+        dset_neutrino_id = f.create_dataset(
+            "neutrino_id",
+            shape=(total_rows,),
+            dtype=np.int32
+        )
+
+        dset_npions = f.create_dataset(
+            "npions",
+            shape=(total_rows,),
+            dtype=np.int32
+        )
+
+        # Default values for files/events without RooTracker info.
+        dset_neut_code[:] = -9999
+        dset_neutrino_id[:] = 0
+        dset_npions[:] = -1
 
     offset = 0
     offset_next = 0
     hit_offset = 0
     hit_offset_next = 0
-    label_map = {22: 0, 11: 1, 13: 2}
+    label_map = {22: 0, 11: 1, 13: 2, 111: 3}
     for input_file in config.input_files:
         print(input_file, flush=True)
         npz_file = np.load(input_file, allow_pickle=True)
@@ -134,6 +167,23 @@ if __name__ == '__main__':
         track_start_position = npz_file['track_start_position']
         boundary_kes= npz_file['track_boundary_kes']
         boundary_types= npz_file['track_boundary_types']
+        if has_roostracker_info:
+            if 'evt_code' in npz_file.files:
+                neut_codes = npz_file['evt_code']
+            elif 'neut_code' in npz_file.files:
+                neut_codes = npz_file['neut_code']
+            else:
+                neut_codes = None
+
+            if 'neutrino_id' in npz_file.files:
+                neutrino_ids = npz_file['neutrino_id']
+            else:
+                neutrino_ids = None
+
+            if 'npions' in npz_file.files:
+                n_pions = npz_file['npions']
+            else:
+                n_pions = None
 
         offset_next += event_ids.shape[0]
 
@@ -141,6 +191,16 @@ if __name__ == '__main__':
         dset_PATHS[offset:offset_next] = root_files
         dset_energies[offset:offset_next, :] = energies.reshape(-1, 1)
         dset_positions[offset:offset_next, :, :] = positions.reshape(-1, 1, 3)
+
+        if has_roostracker_info:
+            if neut_codes is not None:
+                dset_neut_code[offset:offset_next] = neut_codes
+
+            if neutrino_ids is not None:
+                dset_neutrino_id[offset:offset_next] = neutrino_ids
+
+            if n_pions is not None:
+                dset_npions[offset:offset_next] = n_pions
 
         labels = np.full(pids.shape[0], -1)
         for k, v in label_map.items():
