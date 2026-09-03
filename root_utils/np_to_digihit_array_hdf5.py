@@ -45,6 +45,8 @@ if __name__ == '__main__':
     # The final HDF5 will only contain these datasets if at least one
     # input .npz file contains them.
     has_roostracker_info = False
+    # Optional nominal detector off-axis angle in hundredths of a degree.
+    has_file_oaa = False
     # Optional outer detector hit counts.
     has_od_info = False
     for input_file in config.input_files:
@@ -58,6 +60,8 @@ if __name__ == '__main__':
             and 'npions' in npz_file.files
         ):
             has_roostracker_info = True
+        if 'file_oaa' in npz_file.files:
+            has_file_oaa = True
         if 'od_nhits' in npz_file.files:
             has_od_info = True
         trigger_times = npz_file['trigger_time']
@@ -145,6 +149,16 @@ if __name__ == '__main__':
         dset_neutrino_id[:] = 0
         dset_npions[:] = -1
 
+    if has_file_oaa:
+        dset_file_oaa = f.create_dataset(
+            "file_oaa",
+            shape=(total_rows,),
+            dtype=np.int32
+        )
+        # -1 marks input files/events without this optional metadata.
+        dset_file_oaa[:] = -1
+        dset_file_oaa.attrs["units"] = "0.01 degree"
+
     if has_od_info:
         dset_od_nhits = f.create_dataset(
             "od_nhits",
@@ -185,6 +199,11 @@ if __name__ == '__main__':
             if has_od_info and 'od_nhits' in npz_file.files
             else None
         )
+        file_oaa_values = (
+            npz_file['file_oaa']
+            if has_file_oaa and 'file_oaa' in npz_file.files
+            else None
+        )
         if has_roostracker_info:
             if 'evt_code' in npz_file.files:
                 neut_codes = npz_file['evt_code']
@@ -217,6 +236,9 @@ if __name__ == '__main__':
 
             if n_pions is not None:
                 dset_npions[offset:offset_next] = n_pions
+
+        if has_file_oaa and file_oaa_values is not None:
+            dset_file_oaa[offset:offset_next] = file_oaa_values
 
         if has_od_info and od_hit_counts is not None:
             dset_od_nhits[offset:offset_next] = od_hit_counts

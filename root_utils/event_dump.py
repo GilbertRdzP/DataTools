@@ -73,12 +73,14 @@ def dump_file(infile, outfile):
     evt_code = np.empty(nevents, dtype=np.int32)
     neutrino_id = np.empty(nevents, dtype=np.int32)
     npions = np.empty(nevents, dtype=np.int32)
+    file_oaa = np.full(nevents, -1, dtype=np.int32)
 
     evt_code[:] = -9999
     neutrino_id[:] = 0
     npions[:] = -1
 
     has_roostracker_info = False
+    has_file_oaa = False
 
     # Optional outer detector information.
     # A real event with no OD hits is stored as 0; -1 means unavailable.
@@ -101,6 +103,9 @@ def dump_file(infile, outfile):
             evt_code[ev] = roostracker_info["evt_code"]
             neutrino_id[ev] = roostracker_info["neutrino_id"]
             npions[ev] = roostracker_info["npions"]
+            if "file_oaa" in roostracker_info:
+                has_file_oaa = True
+                file_oaa[ev] = roostracker_info["file_oaa"]
 
         event_od_nhits = wcsim.get_od_nhits()
         if event_od_nhits is not None:
@@ -190,6 +195,9 @@ def dump_file(infile, outfile):
         output_dict["evt_code"] = evt_code
         output_dict["neutrino_id"] = neutrino_id
         output_dict["npions"] = npions
+
+    if has_file_oaa:
+        output_dict["file_oaa"] = file_oaa
 
     if has_od_info:
         output_dict["od_nhits"] = od_nhits

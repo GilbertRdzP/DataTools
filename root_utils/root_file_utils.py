@@ -442,6 +442,7 @@ class WCSim:
           - evt_code
           - neutrino_id
           - npions
+          - file_oaa, when the detector position is available from Settings
         Returns None if the file has no RooTracker tree or the vertex cannot be read.
         """
         if not hasattr(self, "file") or not self.file:
@@ -488,11 +489,97 @@ class WCSim:
             neutrino_id = 0
         if npions is None:
             npions = -1
-        return {
+
+        event_info = {
             "evt_code": evt_code,
             "neutrino_id": neutrino_id,
             "npions": npions,
         }
+
+        file_oaa = self.get_file_oaa()
+        if file_oaa is not None:
+            event_info["file_oaa"] = file_oaa
+
+        return event_info
+
+    def get_file_oaa(self):
+        """
+        Return the nominal detector off-axis angle for the current ROOT file.
+
+        This reproduces RecoInterface::GetOAA and fFileOAA.  The detector
+        centre is read from the Settings tree, converted from metres to
+        centimetres and compared with the nominal beam direction from the
+        average beam decay point.  The returned integer is the angle in
+        hundredths of a degree, e.g. 250 means 2.50 degrees.
+
+        The value is only exposed for files containing fRooTrackerOutputTree.
+        None is returned when either RooTracker or the required detector
+        settings are unavailable.
+        """
+        if hasattr(self, "_file_oaa"):
+            return self._file_oaa
+
+        self._file_oaa = None
+
+        if not hasattr(self, "file") or not self.file:
+            return None
+
+        if not self.file.Get("fRooTrackerOutputTree"):
+            return None
+
+        settings = self.file.Get("Settings")
+        if not settings or settings.GetEntries() < 1:
+            return None
+
+        settings.GetEntry(0)
+
+        try:
+            detector_centre_cm = np.asarray(
+                [float(settings.WCDetCentre[i]) * 100.0 for i in range(3)],
+                dtype=np.float64,
+            )
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return None
+
+        # RecoInterface corrects the detector x coordinate using NuIdfdPos,
+        # because WCDetCentre[0] was not saved correctly for NuPRISM-0 files.
+        try:
+            detector_centre_cm[0] = float(settings.NuIdfdPos[0])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            pass
+
+        beam_decay_cm = np.asarray(
+            [0.0, -2.675413 * 100.0, 42.28534 * 100.0],
+            dtype=np.float64,
+        )
+        beam_direction = np.asarray(
+            [0.0, -np.sin(0.063478), np.cos(0.063478)],
+            dtype=np.float64,
+        )
+
+        detector_direction = detector_centre_cm - beam_decay_cm
+        detector_distance = np.linalg.norm(detector_direction)
+        beam_direction_norm = np.linalg.norm(beam_direction)
+
+        if (
+            detector_distance == 0.0
+            or beam_direction_norm == 0.0
+            or not np.all(np.isfinite(detector_direction))
+        ):
+            return None
+
+        cosine = np.dot(detector_direction, beam_direction) / (
+            detector_distance * beam_direction_norm
+        )
+        angle_degrees = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+        if not np.isfinite(angle_degrees):
+            return None
+
+        # Match C++ round() for this positive quantity and preserve the
+        # fFileOAA convention of storing hundredths of a degree.
+        self._file_oaa = int(np.floor(angle_degrees * 100.0 + 0.5))
+        return self._file_oaa
     
     def get_event_info(self):
         self.get_trigger(0)
