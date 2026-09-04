@@ -527,7 +527,7 @@ class WCSim:
         if not self.file.Get("fRooTrackerOutputTree"):
             return None
 
-        settings = self.file.Get("Settings")
+        settings = self.file.Get("settings")
         if not settings or settings.GetEntries() < 1:
             return None
 
